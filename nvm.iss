@@ -1,7 +1,7 @@
 #define MyAppName "NVM for Windows"
 #define MyAppShortName "nvm"
 #define MyAppLCShortName "nvm"
-#define MyAppVersion "1.1.9"
+#define MyAppVersion "1.1.10"
 #define MyAppPublisher "Ecor Ventures LLC"
 #define MyAppURL "https://github.com/coreybutler/nvm-windows"
 #define MyAppExeName "nvm.exe"
@@ -18,8 +18,8 @@ PrivilegesRequired=admin
 ; SignedUninstaller=yes
 AppId={#MyAppId}
 AppName={#MyAppName}
-AppVersion={%AppVersion}
-AppVerName={#MyAppName} {%AppVersion}
+AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -29,7 +29,7 @@ DisableDirPage=no
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile={#ProjectRoot}\LICENSE
-OutputDir={#ProjectRoot}\dist\{%AppVersion}
+OutputDir={#ProjectRoot}\dist\{#MyAppVersion}
 OutputBaseFilename={#MyAppLCShortName}-setup
 SetupIconFile={#ProjectRoot}\{#MyIcon}
 Compression=lzma
@@ -261,7 +261,7 @@ begin
     RegWriteExpandStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'NVM_SYMLINK', SymlinkPage.Values[0]);
     RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'NVM_HOME', ExpandConstant('{app}'));
     RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'NVM_SYMLINK', SymlinkPage.Values[0]);
-    
+
     RegWriteStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppId}_is1', 'DisplayVersion', '{#MyAppVersion}');
 
     // Update system and user PATH if needed
