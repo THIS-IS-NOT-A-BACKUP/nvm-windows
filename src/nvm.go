@@ -16,21 +16,24 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"nvm/arch"
+	"nvm/encoding"
 	"nvm/file"
 	"nvm/node"
 	"nvm/web"
 
 	"github.com/blang/semver"
+	// "github.com/fatih/color"
+	"github.com/coreybutler/go-where"
 	"github.com/olekukonko/tablewriter"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"golang.org/x/text/encoding"
 )
 
 const (
-	NvmVersion = "1.1.10"
+	NvmVersion = "1.1.11"
 )
 
 type Environment struct {
@@ -157,7 +160,7 @@ func main() {
 		setNodeMirror(detail)
 	case "npm_mirror":
 		setNpmMirror(detail)
-	case "check":
+	case "debug":
 		checkLocalEnvironment()
 	default:
 		help()
@@ -215,6 +218,7 @@ func getVersion(version string, cpuarch string, localInstallsOnly ...bool) (stri
 	// If user specifies "latest" version, find out what version is
 	if version == "latest" || version == "node" {
 		version = getLatest()
+		fmt.Println(version)
 	}
 
 	if version == "lts" {
@@ -597,7 +601,7 @@ func findLatestSubVersion(version string, localOnly ...bool) string {
 	url := web.GetFullNodeUrl("latest-v" + version + ".x" + "/SHASUMS256.txt")
 	content := web.GetRemoteTextFile(url)
 	re := regexp.MustCompile("node-v(.+)+msi")
-	reg := regexp.MustCompile("node-v|-x.+")
+	reg := regexp.MustCompile("node-v|-[xa].+")
 	latest := reg.ReplaceAllString(re.FindString(content), "")
 	return latest
 }
@@ -896,7 +900,11 @@ func checkLocalEnvironment() {
 			if value > 0 {
 				devmode = "ON"
 			}
+		} else {
+			devmode = "UNKNOWN"
 		}
+	} else {
+		devmode = "UNKNOWN (user cannot read registry)"
 	}
 	defer k.Close()
 
@@ -906,15 +914,15 @@ func checkLocalEnvironment() {
 		if !admin && !elevated {
 			user, _ := user.Current()
 			username := strings.Split(user.Username, "\\")
-			fmt.Printf("\"%v\" does not have admin or elevated rights", username[len(username)-1])
+			fmt.Printf("%v is not using admin or elevated rights", username[len(username)-1])
 			if devmode == "ON" {
-				fmt.Printf(", but windows developer mode is enabled.\nMost commands will still work unless \"%v\" lacks rights to modify \"%v\".\n", username[len(username)-1], current)
+				fmt.Printf(", but windows developer mode is\nenabled. Most commands will still work unless %v lacks rights to\nmodify the %v symlink.\n", username[len(username)-1], current)
 			} else {
 				fmt.Println(".")
 			}
 		} else {
 			if admin {
-				fmt.Println("Running NVM for Windows as an admin user.")
+				fmt.Println("Running NVM for Windows with administrator privileges.")
 			} else if elevated {
 				fmt.Println("Running NVM for Windows with elevated permissions.")
 			}
@@ -923,15 +931,69 @@ func checkLocalEnvironment() {
 		fmt.Println(err)
 	}
 
-	// Display developer mode status
-	if !admin {
-		fmt.Printf("\nWindows Developer Mode: %v\n", devmode)
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	handle, _, err := kernel32.NewProc("GetStdHandle").Call(uintptr(0xfffffff5)) // get handle for console input
+	if err != nil && err.Error() != "The operation completed successfully." {
+		fmt.Printf("Error getting console handle: %v", err)
+	} else {
+		var mode uint32
+		result, _, _ := kernel32.NewProc("GetConsoleMode").Call(handle, uintptr(unsafe.Pointer(&mode)))
+		if result != 0 {
+			var title [256]uint16
+			_, _, err := kernel32.NewProc("GetConsoleTitleW").Call(uintptr(unsafe.Pointer(&title)), uintptr(len(title)))
+			if err != nil && err.Error() != "The operation completed successfully." {
+				fmt.Printf("Error getting console title: %v", err)
+			} else {
+				consoleTitle := syscall.UTF16ToString(title[:])
+
+				if !strings.Contains(strings.ToLower(consoleTitle), "command prompt") && !strings.Contains(strings.ToLower(consoleTitle), "powershell") {
+					problems = append(problems, fmt.Sprintf("\"%v\" is not an officially supported shell. Some features may not work as expected.\n", consoleTitle))
+				}
+
+				fmt.Printf("\n%v", consoleTitle)
+			}
+		}
 	}
 
-	fmt.Printf("\nInformation\n-----------\nPath: %v\nVersion: %v\nNVM_HOME: %v\nNVM_SYMLINK: %v\n", os.Args[0], NvmVersion, home, symlink)
+	// SHELL in Linux
+	// TERM in Windows
+	// COMSPEC in Windows provides the terminal path
+	// shell := os.Getenv("ConEmuANSI")
+	// fmt.Printf("Shell: %v\n", shell)
+
+	// Display developer mode status
+	if !admin {
+		// if devmode == "ON" {
+		// 	devmode = color.GreenString(devmode)
+		// } else if devmode == "OFF" {
+		// 	devmode = color.YellowString(devmode)
+		// } else {
+		// 	devmode = color.YellowString(devmode)
+		// }
+
+		fmt.Printf("\n%v %v\n", "Windows Developer Mode:", devmode)
+	}
+
+	executable := os.Args[0]
+	path, err := where.Find(executable)
+	if err != nil {
+		path = "UNKNOWN: " + err.Error()
+	}
+
+	out := "Unknown"
+	output, err := exec.Command(os.Getenv("NVM_SYMLINK")+"\\node.exe", "-v").Output()
+	if err == nil {
+		out = string(output)
+	}
+
+	fmt.Printf("\nPath: %v\nNVM4W Version: %v\nNVM_HOME: %v\nNVM_SYMLINK: %v\n\nActive Node.js Version: %v", path, NvmVersion, home, symlink, out)
 
 	if !nvmsymlinkfound {
 		problems = append(problems, "The NVM4W symlink ("+env.symlink+") was not found in the PATH environment variable.")
+	}
+
+	if home == symlink {
+		problems = append(problems, "NVM_HOME and NVM_SYMLINK cannot be the same value ("+symlink+"). Change NVM_SYMLINK.")
 	}
 
 	nodelist := web.Ping(web.GetFullNodeUrl("index.json"))
@@ -956,16 +1018,29 @@ func checkLocalEnvironment() {
 	}
 
 	if len(problems) == 0 {
-		fmt.Println("\nNo problems detected.")
-		return
+		fmt.Println("\n" + "No problems detected.")
+	} else {
+		// fmt.Println("")
+		// table := tablewriter.NewWriter(os.Stdout)
+		// table.SetHeader([]string{"#", "Problems Detected"})
+		// table.SetColMinWidth(1, 40)
+		// table.SetAutoWrapText(false)
+		// // table.SetBorders(tablewriter.Border{Left: true, Top: false, Right: true, Bottom: false})
+		// // table.SetAlignment(tablewriter.ALIGN_LEFT)
+		// // table.SetCenterSeparator("|")
+		// data := make([][]string, 0)
+		// for i := 0; i < len(problems); i++ {
+		// 	data = append(data, []string{fmt.Sprintf(" %v ", i+1), problems[i]})
+		// }
+		// table.AppendBulk(data) // Add Bulk Data
+		// table.Render()
+		fmt.Println("\nPROBLEMS DETECTED\n-----------------")
+		for _, p := range problems {
+			fmt.Println(p + "\n")
+		}
 	}
 
-	fmt.Println("\nProblems Detected:")
-	for _, p := range problems {
-		fmt.Println("  - " + p)
-	}
-
-	fmt.Println("\nFind help at https://github.com/coreybutler/nvm-windows/wiki/Common-Issues")
+	fmt.Println("\n" + "Find help at https://github.com/coreybutler/nvm-windows/wiki/Common-Issues")
 }
 
 func help() {
@@ -973,8 +1048,8 @@ func help() {
 	fmt.Println("\nUsage:")
 	fmt.Println(" ")
 	fmt.Println("  nvm arch                     : Show if node is running in 32 or 64 bit mode.")
-	fmt.Println("  nvm check                    : Check the NVM4W process for known problems (experimental troubleshooter).")
 	fmt.Println("  nvm current                  : Display active version.")
+	fmt.Println("  nvm debug                    : Check the NVM4W process for known problems (troubleshooter).")
 	fmt.Println("  nvm install <version> [arch] : The version can be a specific version, \"latest\" for the latest current version, or \"lts\" for the")
 	fmt.Println("                                 most recent LTS version. Optionally specify whether to install the 32 or 64 bit version (defaults")
 	fmt.Println("                                 to system arch). Set [arch] to \"all\" to install 32 AND 64 bit versions.")
@@ -1009,7 +1084,7 @@ func checkVersionExceedsLatest(version string) bool {
 	url := web.GetFullNodeUrl("latest/SHASUMS256.txt")
 	content := web.GetRemoteTextFile(url)
 	re := regexp.MustCompile("node-v(.+)+msi")
-	reg := regexp.MustCompile("node-v|-x.+")
+	reg := regexp.MustCompile("node-v|-[xa].+")
 	latest := reg.ReplaceAllString(re.FindString(content), "")
 	var vArr = strings.Split(version, ".")
 	var lArr = strings.Split(latest, ".")
@@ -1054,7 +1129,7 @@ func getLatest() string {
 	url := web.GetFullNodeUrl("latest/SHASUMS256.txt")
 	content := web.GetRemoteTextFile(url)
 	re := regexp.MustCompile("node-v(.+)+msi")
-	reg := regexp.MustCompile("node-v|-x.+")
+	reg := regexp.MustCompile("node-v|-[xa].+")
 	return reg.ReplaceAllString(re.FindString(content), "")
 }
 
@@ -1151,15 +1226,9 @@ func runElevated(command string, forceUAC ...bool) (bool, error) {
 }
 
 func saveSettings() {
-	content := "root: " + strings.Trim(env.root, " \n\r") + "\r\narch: " + strings.Trim(env.arch, " \n\r") + "\r\nproxy: " + strings.Trim(env.proxy, " \n\r") + "\r\noriginalpath: " + strings.Trim(env.originalpath, " \n\r") + "\r\noriginalversion: " + strings.Trim(env.originalversion, " \n\r")
-	content = content + "\r\nnode_mirror: " + strings.Trim(env.node_mirror, " \n\r") + "\r\nnpm_mirror: " + strings.Trim(env.npm_mirror, " \n\r")
-	decoder := encoding.Decoder{}
-	decoded, err := decoder.String(content)
-	if err != nil {
-		fmt.Printf("Error attempting to save settings:\n%v\n", err.Error())
-		return
-	}
-	ioutil.WriteFile(env.settings, []byte(decoded), 0644)
+	content := "root: " + strings.Trim(encode(env.root), " \n\r") + "\r\narch: " + strings.Trim(encode(env.arch), " \n\r") + "\r\nproxy: " + strings.Trim(encode(env.proxy), " \n\r") + "\r\noriginalpath: " + strings.Trim(encode(env.originalpath), " \n\r") + "\r\noriginalversion: " + strings.Trim(encode(env.originalversion), " \n\r")
+	content = content + "\r\nnode_mirror: " + strings.Trim(encode(env.node_mirror), " \n\r") + "\r\nnpm_mirror: " + strings.Trim(encode(env.npm_mirror), " \n\r")
+	ioutil.WriteFile(env.settings, []byte(content), 0644)
 }
 
 func getProcessPermissions() (admin bool, elevated bool, err error) {
@@ -1185,22 +1254,16 @@ func getProcessPermissions() (admin bool, elevated bool, err error) {
 	return
 }
 
-// NOT USED?
-/*
-func useArchitecture(a string) {
-  if strings.ContainsAny("32",os.Getenv("PROCESSOR_ARCHITECTURE")) {
-    fmt.Println("This computer only supports 32-bit processing.")
-    return
-  }
-  if a == "32" || a == "64" {
-    env.arch = a
-    saveSettings()
-    fmt.Println("Set to "+a+"-bit mode.")
-  } else {
-    fmt.Println("Cannot set architecture to "+a+". Must be 32 or 64 are acceptable values.")
-  }
+func encode(val string) string {
+	converted := encoding.ToUTF8(val)
+	// if err != nil {
+	// 	fmt.Printf("WARNING: [encoding error] - %v\n", err.Error())
+	// 	return val
+	// }
+
+	return string(converted)
 }
-*/
+
 // ===============================================================
 // END | Utility functions
 // ===============================================================
