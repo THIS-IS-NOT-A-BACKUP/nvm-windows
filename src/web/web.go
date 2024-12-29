@@ -23,6 +23,7 @@ import (
 	fs "github.com/coreybutler/go-fsutil"
 )
 
+var nvmversion = ""
 var client = &http.Client{}
 var nodeBaseAddress = "https://nodejs.org/dist/"
 var npmBaseAddress = "https://github.com/npm/cli/archive/"
@@ -130,8 +131,7 @@ func Download(url string, target string, version string) bool {
 		return false
 	}
 
-	// TODO: Add version to user agent
-	req.Header.Set("User-Agent", "NVM for Windows")
+	req.Header.Set("User-Agent", fmt.Sprintf("NVM for Windows %s", nvmversion))
 
 	response, err := client.Do(req)
 	if err != nil {
@@ -166,7 +166,7 @@ func Download(url string, target string, version string) bool {
 	} else {
 		_, err = io.Copy(output, response.Body)
 		if err != nil {
-			fmt.Println("Error while downloading", url, "-", err)
+			fmt.Printf("Error while downloading %s: %v\n", url, err)
 		}
 	}
 
@@ -319,28 +319,24 @@ func GetNpm(root string, v string) bool {
 	}
 }
 
-func GetRemoteTextFile(url string) string {
+func GetRemoteTextFile(url string) (string, error) {
 	response, httperr := client.Get(url)
 	if httperr != nil {
-		fmt.Println("\nCould not retrieve " + url + ".\n\n")
-		fmt.Printf("%s", httperr)
-		os.Exit(1)
+		return "", fmt.Errorf("Could not retrieve %v: %v", url, httperr)
 	}
 
 	if response.StatusCode != 200 {
-		fmt.Printf("Error retrieving \"%s\": HTTP Status %v\n", url, response.StatusCode)
-		os.Exit(0)
+		return "", fmt.Errorf("Error retrieving \"%s\": HTTP Status %v\n", url, response.StatusCode)
 	}
 
 	defer response.Body.Close()
 
 	contents, readerr := ioutil.ReadAll(response.Body)
 	if readerr != nil {
-		fmt.Printf("%s", readerr)
-		os.Exit(1)
+		return "", fmt.Errorf("error reading HTTP request body: %v", readerr)
 	}
 
-	return string(contents)
+	return string(contents), nil
 }
 
 func IsNode64bitAvailable(v string) bool {
@@ -369,14 +365,14 @@ func IsNodeArm64bitAvailable(v string) bool {
 	vers := strings.Fields(strings.Replace(v, ".", " ", -1))
 	main, _ := strconv.ParseInt(vers[0], 0, 0)
 	minor, _ := strconv.ParseInt(vers[1], 0, 0)
-	fmt.Println("main "+ strconv.FormatInt(main,10) + " minor "+strconv.FormatInt(minor,10))
+	fmt.Println("main " + strconv.FormatInt(main, 10) + " minor " + strconv.FormatInt(minor, 10))
 	if main < 19 {
 		return false
 	}
-	if main == 19 && minor < 9{
+	if main == 19 && minor < 9 {
 		return false
 	}
-	
+
 	// TODO: fixme. Assume a 64 bit version exists
 	return true
 }
